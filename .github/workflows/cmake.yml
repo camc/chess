@@ -1,0 +1,91 @@
+name: CMake
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-game-windows:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Cache deps
+      id: cache-deps
+      uses: actions/cache@v2
+      with:
+        path: ${{github.workspace}}/build/_deps
+        key: deps-windows-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCHESS_ENABLE_DEBUG_KEYS=1
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+      
+    - uses: actions/upload-artifact@v2
+      with:
+        name: game-build-windows
+        path: |
+          ${{github.workspace}}/build/${{env.BUILD_TYPE}}/chess.exe
+          ${{github.workspace}}/build/${{env.BUILD_TYPE}}/res
+    
+  build-game-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Cache deps
+      id: cache-deps
+      uses: actions/cache@v2
+      with:
+        path: ${{github.workspace}}/build/_deps
+        key: deps-linux-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Setup Environment
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install gcc-multilib
+        sudo apt-get install -y --no-install-recommends libglfw3 libglfw3-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxext-dev libxfixes-dev
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCHESS_ENABLE_DEBUG_KEYS=1
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+      
+    - uses: actions/upload-artifact@v2
+      with:
+        name: game-build-linux
+        path: |
+          ${{github.workspace}}/build/chess
+          ${{github.workspace}}/build/res
+
+  run-tests:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Cache deps
+      id: cache-deps
+      uses: actions/cache@v2
+      with:
+        path: ${{github.workspace}}/build/_deps
+        key: deps-windows-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCHESS_TEST=1
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+      
+    - name: Run tests
+      run: ${{github.workspace}}/build/${{env.BUILD_TYPE}}/chess.exe
