@@ -579,6 +579,7 @@ static bool movegen_task(struct MovegenTaskArg *arg) {
     negamax_from_root(arg->state, arg->depth, arg->start_time);
 
     if (acnt_dec(arg->refcount)) {
+        free(arg->refcount);
         free(arg->state);
         free(arg->legal_moves);
     }
