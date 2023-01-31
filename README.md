@@ -18,7 +18,7 @@
 ![](screenshot.png)
 
 ## Installation
-Binaries are available for [Linux](https://github.com/camc/chess/releases/download/v0/game-build-linux-amd64.zip) and [Windows](https://github.com/camc/chess/releases/download/v0/game-build-windows-amd64.zip).
+Binaries are available for [Linux and Windows](https://github.com/camc/chess/releases/latest).
 
 ## Building
 
