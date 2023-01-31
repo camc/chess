@@ -3,6 +3,8 @@
 
 #include <chess.h>
 #include <stdbool.h>
+#include <threadpool.h>
+#include <time.h>
 
 // The maximum number of legal moves a single piece can have
 #define PIECE_LEGAL_MOVES_MAX 27
@@ -13,9 +15,9 @@
 
 bool is_piece_attacked(struct GameState *state, struct BoardPos attackee_pos, enum Player attacker);
 bool is_move_legal(struct GameState *state, struct Move move);
-void make_move(struct GameState *state, struct Move move);
+void make_move(struct GameState *state, struct Move move, bool calculate_hash);
 bool is_player_checkmated(struct GameState *state, enum Player player);
-struct Move generate_move(struct GameState *state);
+void generate_move(struct GameState *state, struct ThreadPool *pool, time_t start_time);
 bool is_stalemate(struct GameState *state);
 int position_value(struct GameState *state);
 

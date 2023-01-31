@@ -13,11 +13,12 @@ struct FrontendState frontend_state = {.game_state = NULL,
                                        .move_log_size = 0,
                                        .move_log_idx = 0,
                                        .move_log_line_chars = 0,
-                                       .winner = -1,
+                                       .winner = WINNER_NONE,
                                        .message_box = NULL,
                                        .debug_allow_illegal_moves = false,
                                        .debug_copy_on_move = false,
-                                       .debug_computer_vs_computer = false};
+                                       .threadpool = NULL,
+                                       .movegen_started = 0};
 
 // Resets the parts of the frontend state used to store
 // data about the current game to the default values.
@@ -38,13 +39,18 @@ static void reset_ingame_frontend_state() {
     frontend_state.move_log_size = 0;
     frontend_state.move_log_idx = 0;
     frontend_state.move_log_line_chars = 0;
-    frontend_state.winner = -1;
+    frontend_state.winner = WINNER_NONE;
+    frontend_state.movegen_started = 0;
     tptable_clear();
 }
 
 // Sets the frontend state to the default values at the start of a chess game,
 // deallocating existing structures if neccesary
 void frontend_new_game() {
+    if (frontend_state.threadpool == NULL) {
+        frontend_state.threadpool = threadpool_init();
+    }
+
     reset_ingame_frontend_state();
     frontend_state.game_state = init_gamestate();
 }

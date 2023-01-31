@@ -11,7 +11,7 @@ if (NOT raylib_FOUND)
 
     FetchContent_Declare(
         raylib
-        URL https://github.com/raysan5/raylib/archive/924b1c7b0cdf25ea65fe10f271efa7a9fa596254.zip
+        URL https://github.com/raysan5/raylib/archive/bf2ad9df5fdcaa385b2a7f66fd85632eeebbadaa.zip
     )
 
     FetchContent_GetProperties(raylib)
@@ -30,7 +30,7 @@ if (NOT raygui_FOUND)
 
     FetchContent_Declare(
         raygui
-        URL https://github.com/raysan5/raygui/archive/10ebad86eff78df6d868be820a313949dca704ef.zip
+        URL https://github.com/raysan5/raygui/archive/4e2a878e715c4aafa6ad7bd58d851221503c6e60.zip
     )
 
     FetchContent_GetProperties(raygui)
@@ -43,7 +43,7 @@ if (NOT raygui_FOUND)
 endif()
 
 include_directories(include ${raygui_SOURCE_DIR}/src)
-add_executable(chess src/main.c src/chess.c src/draw.c src/engine.c src/zobrist.c src/openings.c src/tptable.c src/raygui.c src/fen.c src/frontend_state.c src/ui.c)
+add_executable(chess src/main.c src/chess.c src/draw.c src/engine.c src/zobrist.c src/openings.c src/tptable.c src/raygui.c src/fen.c src/frontend_state.c src/ui.c src/threadpool.c)
 target_link_libraries(chess PRIVATE raylib)
 
 if(MSVC)

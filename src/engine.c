@@ -7,12 +7,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threadpool.h>
 #include <time.h>
 #include <tptable.h>
+#include <util.h>
 #include <zobrist.h>
-
-#define MIN(a, b) ((a) > (b) ? (b) : (a))
-#define MAX(a, b) ((a) < (b) ? (b) : (a))
 
 // clang-format off
 // A list of all move directions white piece can make in (x,y), indexed by the (piece id - 1)
@@ -129,10 +128,10 @@ static unsigned int legal_moves_from_pos(struct GameState *state, struct BoardPo
     return moves_idx;
 }
 
-// Returns a list of all the legal moves for a player, ordered using a heuristic to place the better moves first.
-// The list will be terminated with a NULL_BOARDPOS move.
-// The return value must be deallocated.
-static struct Move *all_legal_moves_ordered(struct GameState *state, enum Player player) {
+// Writes a list of all the legal moves for a player, ordered using a heuristic to place the better moves first.
+// The list must be deallocated.
+// Returns the number of moves in the list.
+static unsigned int all_legal_moves_ordered(struct GameState *state, enum Player player, struct Move **moves_out) {
     // Captures and other moves will be collected separately, as captures are likely to be better moves.
     int moves_size = 50;
     int moves_idx = 0;
@@ -144,7 +143,7 @@ static struct Move *all_legal_moves_ordered(struct GameState *state, enum Player
     // If there is a principal variation stored in the transposition table for this position, place that move first as
     // it is known to be the best.
     struct TranspositionEntry tp_entry = tptable_get(state->hash);
-    bool has_pvn = !boardpos_eq(tp_entry.best_move.from, NULL_BOARDPOS) && is_move_legal(state, tp_entry.best_move);
+    bool has_pvn = tp_entry.depth != 0 && !boardpos_eq(tp_entry.best_move.from, NULL_BOARDPOS);
     bool waiting_for_pvn = has_pvn;
 
     // Get all legal moves for each piece.
@@ -189,8 +188,10 @@ static struct Move *all_legal_moves_ordered(struct GameState *state, enum Player
         }
     }
 
+    size_t move_count = moves_idx + captures_idx + has_pvn;
+
     // Combine the captures and moves into one array, placing the captures first.
-    struct Move *combined_moves = malloc(sizeof(struct Move) * (moves_idx + captures_idx + has_pvn + 1));
+    struct Move *combined_moves = malloc(sizeof(struct Move) * move_count);
     int combined_idx = 0;
 
     // If there is a principal variation place that first.
@@ -207,9 +208,9 @@ static struct Move *all_legal_moves_ordered(struct GameState *state, enum Player
     memcpy(&combined_moves[combined_idx], moves, moves_idx * sizeof(struct Move));
     free(moves);
     combined_idx += moves_idx;
-    combined_moves[combined_idx] = (struct Move){NULL_BOARDPOS, NULL_BOARDPOS};
 
-    return combined_moves;
+    *moves_out = combined_moves;
+    return move_count;
 }
 
 // Returns a value represeting how good a chess position is for white.
@@ -334,13 +335,11 @@ static int negamax(struct GameState *state, int alpha, int beta, int depth, time
 
     // If the game is over return now, there are no legal moves.
     if (is_player_checkmated(state, player)) {
-        // If the player is checkmated then return the worst possible value, multplying to make it worse if the
-        // checkmate is at a higher depth (so closer to the starting position of the search)
-        return -1000000 * (depth + 1);
+        // Player loses
+        return -1000000;
     } else if (is_player_checkmated(state, other_player(player))) {
-        // If the player checkmates then return the best possible value, multplying to make it better if the checkmate
-        // is at a higher depth (so closer to the starting position of the search)
-        return 1000000 * (depth + 1);
+        // Player wins
+        return 1000000;
     } else if (is_stalemate(state)) {
         // If it is stalemate then return 0, a draw so not good for either player.
         return 0;
@@ -350,12 +349,15 @@ static int negamax(struct GameState *state, int alpha, int beta, int depth, time
     if (depth == 0) return position_value(state) * (player == WhitePlayer ? 1 : -1);
 
     // If the maximum amount of time that can be spent on move generation has elapsed then return now.
-    if (depth > CHECK_SEARCH_TIME_ABOVE_DEPTH && time(NULL) - start_time >= MAX_MOVEGEN_SEARCH_TIME) return INT_MIN;
+    if (time(NULL) - start_time >= MAX_MOVEGEN_SEARCH_TIME) return INT_MIN;
 
     // Setup the transposition table entry, to be added at the end of the evaluation.
+    if (tp_entry.depth == 0) {
+        tp_entry.best_move = (struct Move){NULL_BOARDPOS, NULL_BOARDPOS};
+    }
+
     tp_entry.hash = state->hash;
     tp_entry.depth = depth;
-    tp_entry.best_move = (struct Move){NULL_BOARDPOS, NULL_BOARDPOS};
 
     // Store the best value found so it can be returned.
     int best_value = INT_MIN;
@@ -363,16 +365,17 @@ static int negamax(struct GameState *state, int alpha, int beta, int depth, time
     // Get a list of every legal move from this position for the player, and order them using a heuristic so that better
     // moves are ideally first. Alpga-beta pruning performs better if the better moves are first as more beta cutoffs
     // can occur.
-    struct Move *legal_moves = all_legal_moves_ordered(state, player);
+    struct Move *legal_moves;
+    unsigned int move_count = all_legal_moves_ordered(state, player, &legal_moves);
 
     // Evaluate each of the moves to find the move with the best value.
-    for (int i = 0; !boardpos_eq(legal_moves[i].from, NULL_BOARDPOS); i++) {
+    for (unsigned int i = 0; i < move_count; i++) {
         struct Move move = legal_moves[i];
 
         // A copy of the GameState is created so that the move can be made on it temporarily while it is being
         // evaluated.
         struct GameState *state_copy = copy_gamestate(state);
-        make_move(state_copy, move);
+        make_move(state_copy, move, true);
 
         // Negamax is recursively called to evaluate the position after the move has been made.
         // The properties `min(a, b) === -max(-a, -b)` and `max(a, b) === -min(-a, -b)` are used to allow the same
@@ -403,6 +406,7 @@ static int negamax(struct GameState *state, int alpha, int beta, int depth, time
         // Keep track of the best value we have found.
         if (value > best_value) {
             best_value = value;
+            tp_entry.best_move = move;
             // In negamax we act as the maximising player, so update alpha if we have a new max.
             if (value > alpha) {
                 alpha = value;
@@ -476,7 +480,7 @@ static int negamax(struct GameState *state, int alpha, int beta, int depth, time
 // Returns the best move for the player to move from the current position. Calls negamax to evaluate each possible move,
 // and returns the best. Returns a Move with NULL_BOARDPOS as the `from` if the time limit was reached or there are no
 // legal moves.
-static struct Move negamax_from_root(struct GameState *state, int depth, time_t start_time) {
+static void negamax_from_root(struct GameState *state, int depth, time_t start_time) {
     // Inititalise alpha and beta to the starting values.
     // In the alpha-beta pruning algorithm alpha is used to store the best value the maximising player has so far and
     // beta is used to store the best value the minimising player has so far.
@@ -497,17 +501,18 @@ static struct Move negamax_from_root(struct GameState *state, int depth, time_t 
     // Get a list of every legal move from this position for the player, and order them using a heuristic so that better
     // moves are ideally first. Alpha-beta pruning performs better if the better moves are first as more beta cutoffs
     // can occur.
-    struct Move *legal_moves = all_legal_moves_ordered(state, player);
+    struct Move *legal_moves;
+    unsigned int move_count = all_legal_moves_ordered(state, player, &legal_moves);
 
     // Every legal move is evaluated and compared to find the move with the highest value, the best move for the player.
-    for (int i = 0; !boardpos_eq(legal_moves[i].from, NULL_BOARDPOS); i++) {
+    for (unsigned int i = 0; i < move_count; i++) {
         struct Move move = legal_moves[i];
 
         // A copy of the state is created so the current state is not affected by the move.
         struct GameState *state_copy = copy_gamestate(state);
 
         // Make the move
-        make_move(state_copy, move);
+        make_move(state_copy, move, true);
 
         // Negamax is called to evaluate the position after the move has been made.
         // The properties `min(a, b) === -max(-a, -b)` and `max(a, b) === -min(-a, -b)` are used to allow the same
@@ -521,7 +526,7 @@ static struct Move negamax_from_root(struct GameState *state, int depth, time_t 
         // INT_MIN is returned when the time limit is reached.
         if (value == INT_MIN) {
             free(legal_moves);
-            return (struct Move){NULL_BOARDPOS, NULL_BOARDPOS};
+            return;
         }
 
         // The value returned by negamax is relative to the player to move (greater values are better for the player to
@@ -544,14 +549,54 @@ static struct Move negamax_from_root(struct GameState *state, int depth, time_t 
     }
 
     free(legal_moves);
-    return best_move;
+
+    if (!boardpos_eq(best_move.from, NULL_BOARDPOS)) {
+        // Add the principal variation (best move) to the transposition table, so that it can be used in move
+        // ordering and by generate_move.
+        struct TranspositionEntry entry = tptable_get(state->hash);
+        entry.hash = state->hash;
+        entry.depth = depth;
+        entry.best_move = best_move;
+        entry.value = best_value;
+        entry.type = EntryTypeExact;
+        tptable_put(entry);
+        printf("[movegen] **** %d %d\n", depth, best_value);
+    }
 }
 
-// Generate the best move for the player to move, using negamax with iterative deepening.
-// A move with NULL_BOARDPOS as the `from` is returned if there are no legal moves.
-struct Move generate_move(struct GameState *state) {
-    // Check if there is a move available in the opening book if we are on move <= 10.
-    if (state->move_count <= 10) {
+struct MovegenTaskArg {
+    struct AtomicCounter *refcount;  // Refcount of state and legal_moves.
+    struct GameState *state;
+    struct Move *legal_moves;
+    unsigned int move_count;
+    int depth;
+    time_t start_time;
+};
+
+// Task executed the thread pool to perform move generation.
+// See generate_move.
+static bool movegen_task(struct MovegenTaskArg *arg) {
+    negamax_from_root(arg->state, arg->depth, arg->start_time);
+
+    if (acnt_dec(arg->refcount)) {
+        free(arg->state);
+        free(arg->legal_moves);
+    }
+
+    free(arg);
+    return true;
+}
+
+// Generate the best move for the player to move, using negamax with iterative deepening and Lazy SMP on supported
+// systems.
+// The best move will be stored in the transposition table.
+// On systems with multithreading support the function will not block.
+void generate_move(struct GameState *state, struct ThreadPool *pool, time_t start_time) {
+    // Prevent entries for this hash being replaced by other hashes.
+    tptable_set_protected_hash(state->hash);
+
+    // Check if there is a move available in the opening book if we are on move <= 5.
+    if (state->move_count <= 5) {
         struct OpeningItem *opening = find_opening_by_hash(state->hash);
         if (opening) {
             // If there are multiple moves available then one is chosen at random.
@@ -559,15 +604,28 @@ struct Move generate_move(struct GameState *state) {
 
             // Ensure the move is legal to reduce the impact of Zobrist hash collisions.
             if (is_move_legal(state, move)) {
-                return move;
+                struct TranspositionEntry entry = tptable_get(state->hash);
+                entry.hash = state->hash;
+                entry.best_move = move;
+                entry.depth = CHAR_MAX;
+                entry.value = 0;
+                entry.type = EntryTypeExact;
+                tptable_put(entry);
+                return;
             }
         }
     }
 
-    // The start time is stored so the move generation can be time limited.
-    time_t start_time = time(NULL);
+    // The threads will need a copy of the gamestate incase it is deallocated.
+    struct GameState *state_for_threads = copy_gamestate(state);
 
-    struct Move best_move = (struct Move){NULL_BOARDPOS, NULL_BOARDPOS};
+    // Find the legal moves now to avoid doing it on each thread.
+    struct Move *legal_moves;
+    unsigned int move_count =
+        all_legal_moves_ordered(state, state->white_to_move ? WhitePlayer : BlackPlayer, &legal_moves);
+
+    // Counts references to the legal moves and the copied gamestate.
+    struct AtomicCounter *refcount = acnt_init(MAX_SEARCH_DEPTH);
 
     // Use iterative deepening to find the best move.
     // Initially the searching algorithm is ran with a low maximum depth. This depth is iteratively increased and the
@@ -577,35 +635,18 @@ struct Move generate_move(struct GameState *state) {
     // The performance effect of rerunning the algorithm multiple times instead of running it once is minimised as a
     // transposition table is used to store the results of previous evaluations, and the principal variation is stored
     // which is used in move ordering to improve alpha-beta pruning performance.
-    int depth;
-    for (depth = 1; depth < 50; depth++) {
-        // For each depth negamax is used to search for the best move.
-        struct Move move = negamax_from_root(state, depth, start_time);
+    for (int depth = 1; depth <= MAX_SEARCH_DEPTH; depth++) {
+        // Freed by thread
+        struct MovegenTaskArg *arg = malloc(sizeof(*arg));
+        arg->state = state_for_threads;
+        arg->depth = depth;
+        arg->start_time = start_time;
+        arg->legal_moves = legal_moves;
+        arg->move_count = move_count;
+        arg->refcount = refcount;
 
-        // A move with NULL_BOARDPOS as the from is returned if the time limit was reached or there are no legal moves.
-        // Once this happens the iterative deepening stops, and the result of the previous iteration (if any) is used.
-        if (boardpos_eq(move.from, NULL_BOARDPOS))
-            break;
-        else {
-            // After a successful iteration the current best move is stored.
-            // The best move is overriden as the search is at a greater depth than any previous searches, so the most
-            // accurate.
-            best_move = move;
-
-            // Add the principal variation (best move) to the transposition table, so that it can be used in move
-            // ordering.
-            struct TranspositionEntry entry = tptable_get(state->hash);
-            entry.best_move = move;
-            entry.hash = state->hash;
-            tptable_put(entry);
-        }
+        threadpool_enqueue(pool, (TaskFunc)movegen_task, arg);
     }
-
-#if !defined(NDEBUG) || defined(CHESS_ENABLE_DEBUG_KEYS)
-    printf("movegen depth = %d\n", depth);
-#endif
-
-    return best_move;
 }
 
 // Checks if the game is stalemate.
@@ -654,12 +695,14 @@ bool is_player_checkmated(struct GameState *state, enum Player player) {
 
 // Checks if a state is legal, e.g. if white is to move, black's king must not be in check for the state to be legal.
 static bool is_state_legal(struct GameState *state) {
+    // NOTE This must not use state->hash (may be unset).
     enum Player last_move = state->white_to_move ? BlackPlayer : WhitePlayer;
     return !is_player_in_check(state, last_move);
 }
 
 // Makes a move, updating the board and other state such as castling rights and en passant targets.
-void make_move(struct GameState *state, struct Move move) {
+// If calculate_hash is true the Zobrist hash of the new state will be written to state->hash.
+void make_move(struct GameState *state, struct Move move, bool calculate_hash) {
     struct Piece from_piece = get_piece(state, move.from);
     struct Piece to_piece = get_piece(state, move.to);
 
@@ -749,13 +792,18 @@ void make_move(struct GameState *state, struct Move move) {
     // A move has been made so the player to move swaps.
     state->white_to_move = !state->white_to_move;
 
-    // Calculate the Zobrist hash of the new state.
-    state->hash = hash_state(state);
+    // Calculate the Zobrist hash of the new state if needed.
+    if (calculate_hash) {
+        state->hash = hash_state(state);
+    } else {
+        state->hash = 0;
+    }
 }
 
 // Returns if it is possible for a piece to move from one position to another.
 // It does not check legality (e.g. if in check, castling rights), it only checks if a the move follows the patterns of
-// the piece and there are no pieces blocking the move.
+// the piece.
+// Also checks if any squares under a castling moves are being attacked.
 static bool is_move_possible(struct GameState *state, struct Move move) {
     struct Piece from_piece = get_piece(state, move.from);
     struct Piece to_piece = get_piece(state, move.to);
@@ -856,8 +904,7 @@ static bool is_move_possible(struct GameState *state, struct Move move) {
             int direction = from_piece.player == BlackPlayer ? 1 : -1;
 
             return (move.to.rank - move.from.rank == direction && abs(move.from.file - move.to.file) <= 1) ||
-                   (move.to.rank - move.from.rank == 2 * direction && move.from.file == move.to.file &&
-                    get_piece(state, BoardPos(move.from.file, move.from.rank + direction)).type == Empty);
+                   (move.to.rank - move.from.rank == 2 * direction && move.from.file == move.to.file);
         case Empty:
             return false;
     }
@@ -922,7 +969,7 @@ bool is_move_legal(struct GameState *state, struct Move move) {
     // Check if the resulting state after the move is legal, for example the player which has moved must not be in
     // check.
     struct GameState *state_copy = copy_gamestate(state);
-    make_move(state_copy, move);
+    make_move(state_copy, move, false);
     bool legal = is_state_legal(state_copy);
     free(state_copy);
 
@@ -936,115 +983,89 @@ bool is_piece_attacked(struct GameState *state, struct BoardPos attackee_pos, en
     // Each possible attacker piece type is checked, each piece moves differently.
     // For each piece type every valid (regardless of legality) move pattern ending at the attackee position is checked
     // to see if there is an attacking piece of that type in an attacking position.
-    for (enum PieceType attacker_type = 1; attacker_type < 7; attacker_type++) {
-        switch (attacker_type) {
-            case King:
-                // A king can move one square in all eight directions.
-                for (int i = 0; i < 8; i++) {
-                    struct BoardPos direction = PIECE_MOVE_DIRECTIONS[attacker_type - 1][i];
-                    struct BoardPos check = boardpos_add(attackee_pos, direction);
 
-                    if (!boardpos_eq(check, NULL_BOARDPOS)) {
-                        // Check if there is an attacking piece of the correct type in the possible attacking position.
-                        struct Piece check_piece = get_piece(state, check);
-                        if (check_piece.type == attacker_type && check_piece.player == attacker) {
-                            return true;
-                        }
-                    }
+    // Check King, Rook, Bishop, Queen
+    for (int i = 0; i < 8; i++) {
+        const struct BoardPos translation = PIECE_MOVE_DIRECTIONS[Queen - 1][i];
+
+        const bool is_diagonal = abs(translation.file) == abs(translation.rank);
+        const bool is_king = abs(translation.file) <= 1 && abs(translation.rank) <= 1;
+
+        struct BoardPos check = boardpos_add(attackee_pos, translation);
+        while (!boardpos_eq(check, NULL_BOARDPOS)) {
+            struct Piece check_piece = get_piece(state, check);
+
+            if (check_piece.type != Empty) {
+                // Check if there is an attacking piece of the correct type in the possible attacking
+                // position.
+
+                bool correct_piece = check_piece.type == Queen || (is_king && check_piece.type == King) ||
+                                     (is_diagonal && check_piece.type == Bishop) ||
+                                     (!is_diagonal && check_piece.type == Rook);
+
+                if (correct_piece && check_piece.player == attacker) {
+                    return true;
+                } else {
+                    break;
                 }
-                break;
+            }
 
-            case Queen:
-            case Rook:
-            case Bishop:
-                for (int i = 0; i < 8; i++) {
-                    // The rook and bishop have less than eight possible move directions, so a NULL_BOARDPOS singifies
-                    // we have reached the end of all the possible directions for them.
-                    if (boardpos_eq(PIECE_MOVE_DIRECTIONS[attacker_type - 1][i], NULL_BOARDPOS)) {
-                        break;
-                    }
+            // Queens, rooks and bishops can attack over multiple squares in the same direction, so the
+            // check continues for every square in that direction. Overflow is handled by boardpos_add,
+            // NULL_BOARDPOS will be returned if the add overflows.
+            check = boardpos_add(check, translation);
+        }
+    }
 
-                    struct BoardPos check = boardpos_add(attackee_pos, PIECE_MOVE_DIRECTIONS[attacker_type - 1][i]);
-                    while (!boardpos_eq(check, NULL_BOARDPOS)) {
-                        struct Piece check_piece = get_piece(state, check);
+    // Check Pawn
+    for (int i = 0; i < 8; i++) {
+        // The pawn has less than eight possible move directions, so a NULL_BOARDPOS singifies
+        // we have reached the end of all the possible directions.
+        if (boardpos_eq(PIECE_MOVE_DIRECTIONS[Pawn - 1][i], NULL_BOARDPOS)) {
+            break;
+        }
 
-                        if (check_piece.type != Empty) {
-                            // Check if there is an attacking piece of the correct type in the possible attacking
-                            // position.
-                            if (check_piece.type == attacker_type && check_piece.player == attacker) {
-                                return true;
-                            } else {
-                                // If the square is not empty and there is no attacking piece in it then there is a
-                                // piece blocking any other possible attacks in this direction, so we can stop now.
-                                break;
-                            }
-                        }
+        struct BoardPos direction = PIECE_MOVE_DIRECTIONS[Pawn - 1][i];
 
-                        // Queens, rooks and bishops can attack over multiple squares in the same direction, so the
-                        // check continues for every square in that direction. Overflow is handled by boardpos_add,
-                        // NULL_BOARDPOS will be returned if the add overflows.
-                        check = boardpos_add(check, PIECE_MOVE_DIRECTIONS[attacker_type - 1][i]);
-                    }
-                }
-                break;
+        // The pawn only attacks on the two diagonal squares in front of it, so ignore moves which remain in
+        // the same file.
+        if (direction.file == 0) continue;
 
-            case Knight:
-                for (int i = 0; i < 8; i++) {
-                    // The knight has less than eight possible move directions, so a NULL_BOARDPOS singifies
-                    // we have reached the end of all the possible directions.
-                    if (boardpos_eq(PIECE_MOVE_DIRECTIONS[attacker_type - 1][i], NULL_BOARDPOS)) {
-                        break;
-                    }
+        // If it is black attacking the pawns move in the opposite direction.
+        if (attackee_piece.player == BlackPlayer) {
+            direction.file *= -1;
+            direction.rank *= -1;
+        }
 
-                    struct BoardPos direction = PIECE_MOVE_DIRECTIONS[attacker_type - 1][i];
-                    struct BoardPos check = boardpos_add(attackee_pos, direction);
+        struct BoardPos check = boardpos_add(attackee_pos, direction);
+        if (!boardpos_eq(check, NULL_BOARDPOS)) {
+            // Check if there is an attacking piece of the correct type in the possible attacking
+            // position.
+            struct Piece check_piece = get_piece(state, check);
+            if (check_piece.type == Pawn && check_piece.player == attacker) {
+                return true;
+            }
+        }
+    }
 
-                    if (!boardpos_eq(check, NULL_BOARDPOS)) {
-                        // Check if there is an attacking piece of the correct type in the possible attacking
-                        // position.
-                        struct Piece check_piece = get_piece(state, check);
-                        if (check_piece.type == attacker_type && check_piece.player == attacker) {
-                            return true;
-                        }
-                    }
-                }
-                break;
+    // Check Knight
+    for (int i = 0; i < 8; i++) {
+        // The knight has less than eight possible move directions, so a NULL_BOARDPOS singifies
+        // we have reached the end of all the possible directions.
+        if (boardpos_eq(PIECE_MOVE_DIRECTIONS[Knight - 1][i], NULL_BOARDPOS)) {
+            break;
+        }
 
-            case Pawn:
-                for (int i = 0; i < 8; i++) {
-                    // The pawn has less than eight possible move directions, so a NULL_BOARDPOS singifies
-                    // we have reached the end of all the possible directions.
-                    if (boardpos_eq(PIECE_MOVE_DIRECTIONS[attacker_type - 1][i], NULL_BOARDPOS)) {
-                        break;
-                    }
+        struct BoardPos direction = PIECE_MOVE_DIRECTIONS[Knight - 1][i];
+        struct BoardPos check = boardpos_add(attackee_pos, direction);
 
-                    struct BoardPos direction = PIECE_MOVE_DIRECTIONS[attacker_type - 1][i];
-
-                    // The pawn only attacks on the two diagonal squares in front of it, so ignore moves which remain in
-                    // the same file.
-                    if (direction.file == 0) continue;
-
-                    // If it is black attacking the pawns move in the opposite direction.
-                    if (attackee_piece.player == BlackPlayer) {
-                        direction.file *= -1;
-                        direction.rank *= -1;
-                    }
-
-                    struct BoardPos check = boardpos_add(attackee_pos, direction);
-                    if (!boardpos_eq(check, NULL_BOARDPOS)) {
-                        // Check if there is an attacking piece of the correct type in the possible attacking
-                        // position.
-                        struct Piece check_piece = get_piece(state, check);
-                        if (check_piece.type == attacker_type && check_piece.player == attacker) {
-                            return true;
-                        }
-                    }
-                }
-                break;
-
-            default:
-                // This should never be reached.
-                return false;
+        if (!boardpos_eq(check, NULL_BOARDPOS)) {
+            // Check if there is an attacking piece of the correct type in the possible attacking
+            // position.
+            struct Piece check_piece = get_piece(state, check);
+            if (check_piece.type == Knight && check_piece.player == attacker) {
+                return true;
+            }
         }
     }
 

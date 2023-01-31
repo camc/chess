@@ -31,7 +31,7 @@ struct Piece {
 // The file and rank are signed so that the BoardPos can also be used to
 // store directions of movement, e.g. {file - 1, rank 0} would be moving in
 // the 'east' direction (from whites POV)
-struct BoardPos {
+__attribute__((packed)) struct BoardPos {
     int8_t file;
     int8_t rank;
 };

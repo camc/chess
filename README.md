@@ -3,13 +3,14 @@
 ## Features
 - 
 - Computer move generation
-    - minimax (negamax), alpha-beta pruning & iterative deepening; usually 7+ move depth
+    - minimax (negamax), alpha-beta pruning & iterative deepening
+    - Multithreaded search (Lazy SMP) on platforms supporting C11 threads
     - Move ordering based on captures and a stored principal variation
     - Polyglot BIN format opening book support
     - Transposition table optimisations
 - Chess GUI implemented using [Raylib](https://github.com/raysan5/raylib) and [Raygui](https://github.com/raysan5/raygui)
 - Local player-vs-player and player-vs-computer modes
-- Game loading and saving in FEN (Forsyth–Edwards Notation)
+- Game loading and saving in [FEN (Forsyth–Edwards Notation)](https://en.wikipedia.org/wiki/Forsyth%E2%80%93Edwards_Notation)
 - All chess rules are supported except the 50 move rule, repetition and promotion to non-queen pieces
 - Supports Linux, Windows, macOS, FreeBSD, probably anything Raylib supports
 

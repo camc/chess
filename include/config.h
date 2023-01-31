@@ -12,17 +12,18 @@
 #define WINDOW_HEIGHT 504
 
 // The size of the transposition table
-#define TRANSPOSITION_TABLE_SIZE 1024
+#define TRANSPOSITION_TABLE_SIZE 1048576
 
 // The board square background colours, hex RGBA
 #define LIGHT_SQUARE_COLOUR 0xfffedbff
 #define DARK_SQUARE_COLOUR 0x38a3beff
 
-// The maximum number of seconds allowed for move generation per move.
-#define MAX_MOVEGEN_SEARCH_TIME 2
+// The maximum number of seconds allowed for move generation threads per move.
+#define MAX_MOVEGEN_SEARCH_TIME 3
 
-// The move generation search time is only checked at depths above this to improve performance.
-#define CHECK_SEARCH_TIME_ABOVE_DEPTH 4
+// The maximum movegen search depth attempted
+// Higher values will increase memory usage.
+#define MAX_SEARCH_DEPTH 32
 
 // Defined if debug settings such as keybindings should be enabled
 #if !defined(NDEBUG) || defined(CHESS_ENABLE_DEBUG_KEYS)
