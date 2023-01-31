@@ -25,16 +25,24 @@ struct Piece {
     enum Player player;
 };
 
+#ifdef __GNUC__
+#define _PACK( __Declaration__ ) __Declaration__ __attribute__((__packed__))
+#endif
+
+#ifdef _MSC_VER
+#define _PACK( __Declaration__ ) __pragma( pack(push, 1) ) __Declaration__ __pragma( pack(pop))
+#endif
+
 // Stores representation of a position on the board.
 // {file 0, rank 0} is the top left of the board (from whites POV)
 // and {file 7, rank 7} is the bottom right (from whites POV)
 // The file and rank are signed so that the BoardPos can also be used to
 // store directions of movement, e.g. {file - 1, rank 0} would be moving in
 // the 'east' direction (from whites POV)
-__attribute__((packed)) struct BoardPos {
+_PACK(struct BoardPos {
     int8_t file;
     int8_t rank;
-};
+});
 
 // Structure used to store a move (actually a ply), used by the engine
 // when generating moves etc.
