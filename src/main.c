@@ -7,6 +7,7 @@
 #include <fen.h>
 #include <frontend_state.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <openings.h>
 #include <raygui.h>
 #include <raylib.h>
@@ -14,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threadpool.h>
 #include <time.h>
 #include <tptable.h>
 #include <ui.h>
@@ -43,17 +45,12 @@ static void game_loop() {
 
     // Toggle the frontend_state.winner state between no frontend_state.winner, white wins, black wins and draw
     if (IsKeyPressed(KEY_W)) {
-        frontend_state.winner = frontend_state.winner == 2 ? -1 : frontend_state.winner + 1;
+        frontend_state.winner = frontend_state.winner == WINNER_DRAW ? WINNER_NONE : frontend_state.winner + 1;
     }
 
     // Toggle between player-vs-player and player-vs-computer game modes
     if (IsKeyPressed(KEY_M)) {
         frontend_state.two_player_mode = !frontend_state.two_player_mode;
-    }
-
-    // Toggle computer-vs-computer mode
-    if (IsKeyPressed(KEY_A)) {
-        frontend_state.debug_computer_vs_computer = !frontend_state.debug_computer_vs_computer;
     }
 
     // Print the position value relative to white
@@ -76,26 +73,44 @@ static void game_loop() {
 #endif
 
     // Computer moves
-    if (frontend_state.winner == -1 && !frontend_state.two_player_mode &&
-        (frontend_state.debug_computer_vs_computer || !frontend_state.game_state->white_to_move)) {
-        enum Player player = frontend_state.game_state->white_to_move ? WhitePlayer : BlackPlayer;
-        struct Move move = generate_move(frontend_state.game_state);
-        if (!boardpos_eq(move.from, NULL_BOARDPOS)) {
-            log_move(move.from, move.to);
-            make_move(frontend_state.game_state, move);
-            frontend_state.selected_position = NULL_BOARDPOS;
+    if (frontend_state.winner == WINNER_NONE && !frontend_state.two_player_mode &&
+        !frontend_state.game_state->white_to_move) {
+        struct TranspositionEntry entry = tptable_get(frontend_state.game_state->hash);
 
-            if (is_player_checkmated(frontend_state.game_state, WhitePlayer)) {
-                frontend_state.winner = player == WhitePlayer ? 0 : 1;
-            } else if (is_stalemate(frontend_state.game_state)) {
-                frontend_state.winner = 2;
+        if (frontend_state.movegen_started == 0) {
+            // Start generating moves if it wasn't started alrady.
+            frontend_state.movegen_started = time(NULL);
+            generate_move(frontend_state.game_state, frontend_state.threadpool, frontend_state.movegen_started);
+        } else if (entry.depth == CHAR_MAX || time(NULL) - frontend_state.movegen_started >= MAX_MOVEGEN_SEARCH_TIME) {
+            // Movegen has completed, make the move.
+
+            frontend_state.movegen_started = 0;
+            printf("[movegen] DONE %d %d\n", entry.depth, entry.value);
+
+            if (!boardpos_eq(entry.best_move.from, NULL_BOARDPOS)) {
+                // Log and make the move.
+                log_move(entry.best_move.from, entry.best_move.to);
+                make_move(frontend_state.game_state, entry.best_move, true);
+
+                // Remove the selected piece if the piece no longer exists.
+                if (!boardpos_eq(frontend_state.selected_position, NULL_BOARDPOS) &&
+                    (get_piece(frontend_state.game_state, frontend_state.selected_position).type == Empty ||
+                     boardpos_eq(frontend_state.selected_position, entry.best_move.to))) {
+                    frontend_state.selected_position = NULL_BOARDPOS;
+                }
+
+                // Set the winner if there was checkmate or stalemate.
+                if (is_player_checkmated(frontend_state.game_state, WhitePlayer)) {
+                    frontend_state.winner = WINNER_BLACK;
+                } else if (is_stalemate(frontend_state.game_state)) {
+                    frontend_state.winner = WINNER_DRAW;
+                }
             }
         }
     }
 
     // Human moves
-    if (frontend_state.winner == -1 && (frontend_state.game_state->white_to_move || frontend_state.two_player_mode) &&
-        IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+    if (frontend_state.winner == WINNER_NONE && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         int x = GetMouseX();
         int y = GetMouseY();
 
@@ -105,7 +120,8 @@ static void game_loop() {
             struct Piece piece = get_piece(frontend_state.game_state, pos);
 
             // Piece selection and moving
-            if (piece.type != Empty && piece.player == player_to_move) {
+            if (piece.type != Empty && ((frontend_state.two_player_mode && piece.player == player_to_move) ||
+                                        (!frontend_state.two_player_mode && piece.player == WhitePlayer))) {
                 frontend_state.selected_position = pos;
             } else if (!boardpos_eq(frontend_state.selected_position, NULL_BOARDPOS)) {
                 if (frontend_state.debug_allow_illegal_moves ||
@@ -114,7 +130,7 @@ static void game_loop() {
                     log_move(frontend_state.selected_position, pos);
 
                     // Make the move
-                    make_move(frontend_state.game_state, (struct Move){frontend_state.selected_position, pos});
+                    make_move(frontend_state.game_state, (struct Move){frontend_state.selected_position, pos}, true);
 
                     // BUG: doesnt add to piece list
                     if (frontend_state.debug_copy_on_move) {
@@ -125,9 +141,9 @@ static void game_loop() {
                     frontend_state.selected_position = NULL_BOARDPOS;
 
                     if (is_player_checkmated(frontend_state.game_state, other_player(player_to_move))) {
-                        frontend_state.winner = player_to_move == WhitePlayer ? 0 : 1;
+                        frontend_state.winner = player_to_move == WhitePlayer ? WINNER_WHITE : WINNER_BLACK;
                     } else if (is_stalemate(frontend_state.game_state)) {
-                        frontend_state.winner = 2;
+                        frontend_state.winner = WINNER_DRAW;
                     }
                 }
             }
@@ -136,12 +152,25 @@ static void game_loop() {
 
     draw_board(frontend_state.game_state);
 
+    // Draw a line on where the computer is thinking of moving
+    struct TranspositionEntry entry = tptable_get(frontend_state.game_state->hash);
+    if (!frontend_state.two_player_mode && !frontend_state.game_state->white_to_move &&
+        !boardpos_eq(entry.best_move.from, NULL_BOARDPOS)) {
+        int x = entry.best_move.from.file * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2;
+        int y = entry.best_move.from.rank * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2;
+
+        int x2 = entry.best_move.to.file * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2;
+        int y2 = entry.best_move.to.rank * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2;
+
+        DrawLineEx((Vector2){x, y}, (Vector2){x2, y2}, 1.5f, Fade(RED, 0.8f));
+    }
+
     // Draw a circle on the currently selected piece
     if (!boardpos_eq(frontend_state.selected_position, NULL_BOARDPOS)) {
         struct BoardPos pos = frontend_state.selected_position;
         int x = pos.file * BOARD_SQUARE_SIZE;
         int y = pos.rank * BOARD_SQUARE_SIZE;
-        DrawCircle(x + BOARD_SQUARE_SIZE / 2, y + BOARD_SQUARE_SIZE / 2, BOARD_SQUARE_SIZE / 6.0f,
+        DrawCircle(x + BOARD_SQUARE_SIZE / 2, y + BOARD_SQUARE_SIZE / 2, BOARD_SQUARE_SIZE / 7.0f,
                    Fade(DARKBLUE, 0.8f));
     }
 }
@@ -166,6 +195,7 @@ int main() {
     load_textures();
     init_opening_book();
     frontend_new_game();
+    tptable_init();
 
     while (!WindowShouldClose()) {
         BeginDrawing();
@@ -180,12 +210,15 @@ int main() {
         deinit_gamestate(frontend_state.game_state);
     }
 
-    if (frontend_state.move_log != NULL) {
-        free(frontend_state.move_log);
+    if (frontend_state.threadpool != NULL) {
+        threadpool_deinit(frontend_state.threadpool);
     }
+
+    free(frontend_state.move_log);
 
     deinit_opening_book();
     unload_textures();
+    tptable_deinit();
     CloseWindow();
     return EXIT_SUCCESS;
 }

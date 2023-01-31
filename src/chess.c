@@ -11,39 +11,42 @@
 const struct BoardPos NULL_BOARDPOS = {0xf, 0xf};
 
 // BoardPos constructor
-extern inline struct BoardPos BoardPos(int8_t file, int8_t rank) { return (struct BoardPos){file, rank}; }
+struct BoardPos BoardPos(int8_t file, int8_t rank) { return (struct BoardPos){file, rank}; }
 
 // Check if two BoardPos are equal
-extern inline bool boardpos_eq(struct BoardPos a, struct BoardPos b) { return (a.file == b.file && a.rank == b.rank); }
+bool boardpos_eq(struct BoardPos a, struct BoardPos b) {
+    assert(sizeof(struct BoardPos) == 2);
+    return memcmp(&a, &b, 2) == 0;
+}
 
 // Add two BoardPos, returning NULL_BOARDPOS if the result is outside the board
-extern inline struct BoardPos boardpos_add(struct BoardPos a, struct BoardPos b) {
+struct BoardPos boardpos_add(struct BoardPos a, struct BoardPos b) {
     struct BoardPos r = {a.file + b.file, a.rank + b.rank};
     return (r.file > 7 || r.rank > 7 || r.file < 0 || r.rank < 0) ? NULL_BOARDPOS : r;
 }
 
 // Piece constructor
-extern inline struct Piece Piece(enum PieceType type, enum Player player) {
+struct Piece Piece(enum PieceType type, enum Player player) {
     struct Piece p = {type, player};
     return p;
 }
 
 // Put a piece onto the board
 // `pos` must be a valid position
-extern inline void put_piece(struct GameState *state, struct Piece piece, struct BoardPos pos) {
+void put_piece(struct GameState *state, struct Piece piece, struct BoardPos pos) {
     assert(pos.file >= 0 && pos.file < 8 && pos.rank >= 0 && pos.rank < 8);
     state->board[pos.file][pos.rank] = piece;
 }
 
 // Get a piece from the board
 // `pos` must be a valid position
-extern inline struct Piece get_piece(struct GameState *state, struct BoardPos pos) {
+struct Piece get_piece(struct GameState *state, struct BoardPos pos) {
     assert(pos.file >= 0 && pos.file < 8 && pos.rank >= 0 && pos.rank < 8);
     return state->board[pos.file][pos.rank];
 }
 
 // Returns the enpassant target file for a player, or -1 if there is no target
-extern inline int get_enpassant_target_file(struct GameState *state, enum Player player) {
+int get_enpassant_target_file(struct GameState *state, enum Player player) {
     if (player == WhitePlayer) {
         return state->enpassant_target_white;
     } else {
@@ -130,7 +133,7 @@ struct GameState *init_gamestate() {
 }
 
 // Deallocates the GameState
-extern inline void deinit_gamestate(struct GameState *state) { free(state); }
+void deinit_gamestate(struct GameState *state) { free(state); }
 
 // Returns a copy of the gamestate, must be deallocated
 struct GameState *copy_gamestate(struct GameState *state) {
@@ -140,38 +143,34 @@ struct GameState *copy_gamestate(struct GameState *state) {
 }
 
 // Sets the stored king position for a player
-extern inline void set_king_pos(struct GameState *state, enum Player player, struct BoardPos pos) {
+void set_king_pos(struct GameState *state, enum Player player, struct BoardPos pos) {
     player == WhitePlayer ? (state->white_king = pos) : (state->black_king = pos);
 }
 
 // Gets the stored king position for a player
-extern inline struct BoardPos get_king_pos(struct GameState *state, enum Player player) {
+struct BoardPos get_king_pos(struct GameState *state, enum Player player) {
     return player == WhitePlayer ? state->white_king : state->black_king;
 }
 
 // Checks if a player's king is in check
-extern inline bool is_player_in_check(struct GameState *state, enum Player player) {
+bool is_player_in_check(struct GameState *state, enum Player player) {
     return player == WhitePlayer ? state->white_king_in_check : state->black_king_in_check;
 }
 
 // Set a player's king in check status
-extern inline void set_player_in_check(struct GameState *state, enum Player player, bool in_check) {
+void set_player_in_check(struct GameState *state, enum Player player, bool in_check) {
     player == WhitePlayer ? (state->white_king_in_check = in_check) : (state->black_king_in_check = in_check);
 }
 
 // Returns the other player, i.e. white if `player` is black and black if `player` is white
-extern inline enum Player other_player(enum Player player) { return player == WhitePlayer ? BlackPlayer : WhitePlayer; }
+enum Player other_player(enum Player player) { return player == WhitePlayer ? BlackPlayer : WhitePlayer; }
 
 // Swaps a position in the piece list with another position for a player
 void change_piece_list_pos(struct GameState *state, enum Player player, struct BoardPos from, struct BoardPos to) {
     struct BoardPos *piece_list = player == WhitePlayer ? state->piece_list_white : state->piece_list_black;
     for (int i = 0; i < 16; i++) {
         if (boardpos_eq(from, piece_list[i])) {
-            if (player == WhitePlayer)
-                state->piece_list_white[i] = to;
-            else
-                state->piece_list_black[i] = to;
-            break;
+            piece_list[i] = to;
         }
     }
 }

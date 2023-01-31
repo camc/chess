@@ -11,7 +11,7 @@ enum EntryType { EntryTypeExact, EntryTypeUpper, EntryTypeLower };
 struct TranspositionEntry {
     ZobristHash hash;
     struct Move best_move;  // May be absent (NULL_BOARDPOS as the `from` position)
-    unsigned char depth;
+    char depth;
     int value;  // May be absent (set to 0, when depth = 0)
     enum EntryType type;
 };
@@ -19,5 +19,8 @@ struct TranspositionEntry {
 struct TranspositionEntry tptable_get(ZobristHash hash);
 void tptable_put(struct TranspositionEntry entry);
 void tptable_clear();
+void tptable_init();
+void tptable_deinit();
+void tptable_set_protected_hash(ZobristHash hash);
 
 #endif /* TPTABLE_H */

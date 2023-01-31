@@ -33,7 +33,7 @@ void draw_ui() {
             // If the provided FEN is invalid display a message notifying the user
             // and start a default game
             frontend_state.message_box =
-                "An invalid game was provided.\nMake sure a valid game string is copied to the clipboard.";
+                "An invalid game was provided.\nMake sure a valid FEN string is copied to the clipboard.";
             frontend_new_game();
         }
 
@@ -101,8 +101,8 @@ void draw_ui() {
         }
 
         // "Predicted winner: xxxxxxx (XX% certainty)"
-        char label[42] = {0};
-        snprintf(label, 42, "Predicted winner: %s (%d%% certainty)", winner, certainty);
+        char label[51] = {0};
+        snprintf(label, 51, "Predicted winner: %s (%d%% certainty)", winner, certainty);
 
         // Don't bother saying 0% certainty of unknown winner
         if (value == 0 || certainty == 0) {
