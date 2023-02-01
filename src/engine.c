@@ -990,8 +990,8 @@ bool is_piece_attacked(struct GameState *state, struct BoardPos attackee_pos, en
         const struct BoardPos translation = PIECE_MOVE_DIRECTIONS[Queen - 1][i];
 
         const bool is_diagonal = abs(translation.file) == abs(translation.rank);
-        const bool is_king = abs(translation.file) <= 1 && abs(translation.rank) <= 1;
-
+        bool is_king = true;
+        
         struct BoardPos check = boardpos_add(attackee_pos, translation);
         while (!boardpos_eq(check, NULL_BOARDPOS)) {
             struct Piece check_piece = get_piece(state, check);
@@ -1010,6 +1010,9 @@ bool is_piece_attacked(struct GameState *state, struct BoardPos attackee_pos, en
                     break;
                 }
             }
+
+            // Kings can only move one square.
+            is_king = false;
 
             // Queens, rooks and bishops can attack over multiple squares in the same direction, so the
             // check continues for every square in that direction. Overflow is handled by boardpos_add,

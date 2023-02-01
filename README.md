@@ -1,7 +1,6 @@
 # A chess game & engine
 
 ## Features
-- 
 - Computer move generation
     - minimax (negamax), alpha-beta pruning & iterative deepening
     - Multithreaded search (Lazy SMP) on platforms supporting C11 threads
